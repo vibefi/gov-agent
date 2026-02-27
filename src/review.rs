@@ -17,6 +17,7 @@ const MAX_SOURCE_FILES_FOR_SCAN: usize = 6;
 const MAX_BUNDLE_INDEX_BYTES: usize = 64 * 1024;
 const MAX_BUNDLE_CONTENT_BYTES: usize = 256 * 1024;
 const MAX_BUNDLE_CONTENT_FETCHES: usize = 120;
+const SEMANTIC_SCORING_RUBRIC: &str = include_str!("../prompts/semantic_scoring_rubric.md");
 
 pub async fn review_proposal(
     proposal: &Proposal,
@@ -28,7 +29,6 @@ pub async fn review_proposal(
 ) -> Result<ReviewResult> {
     let root_cid = extract_root_cid(&proposal.action);
     let mut findings = Vec::<Finding>::new();
-    let mut llm_context = Vec::<String>::new();
     let mut score = match &proposal.action {
         DecodedAction::Unsupported { reason } => {
             findings.push(Finding {
@@ -65,18 +65,10 @@ pub async fn review_proposal(
     };
 
     if let Some(m) = manifest.as_ref() {
-        evaluate_manifest(m, config, &mut findings, &mut score, &mut llm_context);
+        evaluate_manifest(m, config, &mut findings, &mut score);
 
         if let Some(cid) = &root_cid {
-            analyze_bundle_lightweight(
-                bundle_fetcher,
-                cid,
-                m,
-                &mut findings,
-                &mut score,
-                &mut llm_context,
-            )
-            .await;
+            analyze_bundle_lightweight(bundle_fetcher, cid, m, &mut findings, &mut score).await;
         }
     }
 
@@ -96,11 +88,10 @@ pub async fn review_proposal(
 
     let llm_output = build_llm_score(
         proposal,
-        manifest.as_ref(),
+        &findings,
         bundle_snapshot.as_deref(),
         llm,
         prompt_override,
-        &llm_context,
     )
     .await;
     if let Some((llm_score, _)) = &llm_output {
@@ -135,7 +126,6 @@ fn evaluate_manifest(
     config: &ReviewConfig,
     findings: &mut Vec<Finding>,
     score: &mut f32,
-    llm_context: &mut Vec<String>,
 ) {
     let files = manifest.files.clone().unwrap_or_default();
 
@@ -184,13 +174,6 @@ fn evaluate_manifest(
             *score -= 0.25;
         }
     }
-
-    llm_context.push(format!(
-        "Manifest stats: files={}, total_bytes={}, entry={:?}",
-        files.len(),
-        total_bytes,
-        manifest.entry
-    ));
 }
 
 async fn analyze_bundle_lightweight(
@@ -199,7 +182,6 @@ async fn analyze_bundle_lightweight(
     manifest: &Manifest,
     findings: &mut Vec<Finding>,
     score: &mut f32,
-    llm_context: &mut Vec<String>,
 ) {
     let files = manifest.files.clone().unwrap_or_default();
 
@@ -226,7 +208,7 @@ async fn analyze_bundle_lightweight(
             .fetch_text_file(root_cid, "package.json", MAX_TEXT_FETCH_BYTES)
             .await
     {
-        analyze_package_json(&package_text, findings, score, llm_context);
+        analyze_package_json(&package_text, findings, score);
     }
 
     let source_candidates = files
@@ -247,7 +229,6 @@ async fn analyze_bundle_lightweight(
                 for hit in hits {
                     aggregated_hits.insert(hit.to_string());
                 }
-                llm_context.push(format!("Suspicious token hits in {}", path));
             }
         }
     }
@@ -264,12 +245,7 @@ async fn analyze_bundle_lightweight(
     }
 }
 
-fn analyze_package_json(
-    package_text: &str,
-    findings: &mut Vec<Finding>,
-    score: &mut f32,
-    llm_context: &mut Vec<String>,
-) {
+fn analyze_package_json(package_text: &str, findings: &mut Vec<Finding>, score: &mut f32) {
     let parsed = serde_json::from_str::<Value>(package_text);
     let Ok(value) = parsed else {
         findings.push(Finding {
@@ -295,10 +271,6 @@ fn analyze_package_json(
                 severity: Severity::Warning,
                 message: "package.json scripts contain potentially risky commands".to_string(),
             });
-            llm_context.push(format!(
-                "Suspicious package scripts: {}",
-                suspicious.join(" || ")
-            ));
             *score -= 0.1;
         }
     }
@@ -306,16 +278,15 @@ fn analyze_package_json(
 
 async fn build_llm_score(
     proposal: &Proposal,
-    manifest: Option<&Manifest>,
+    findings: &[Finding],
     bundle_snapshot: Option<&str>,
     llm: &CompositeLlm,
     prompt_override: Option<&str>,
-    llm_context: &[String],
 ) -> Option<(f32, LlmAudit)> {
-    let base_prompt = review_prompt(proposal, manifest, bundle_snapshot, llm_context);
+    let base_prompt = review_prompt(proposal, findings, bundle_snapshot);
     let prompt = match prompt_override {
-        Some(custom) => format!("{custom}\n\n{base_prompt}"),
-        None => format!("{base_prompt}"),
+        Some(custom) => format!("{custom}\n\n{SEMANTIC_SCORING_RUBRIC}\n\n{base_prompt}"),
+        None => format!("{SEMANTIC_SCORING_RUBRIC}\n\n{base_prompt}"),
     };
 
     let prompt_preview = preview_chars(&prompt, 500);
@@ -368,35 +339,26 @@ async fn build_llm_score(
 
 fn review_prompt(
     proposal: &Proposal,
-    manifest: Option<&Manifest>,
+    findings: &[Finding],
     bundle_snapshot: Option<&str>,
-    llm_context: &[String],
 ) -> String {
-    let manifest_snippet = if let Some(m) = manifest {
-        let files = m.files.as_ref().map(|x| x.len()).unwrap_or_default();
-        format!(
-            "Manifest: name={:?}, version={:?}, files={}.",
-            m.name, m.version, files
-        )
+    let findings_summary = if findings.is_empty() {
+        "none".to_string()
     } else {
-        "Manifest unavailable.".to_string()
-    };
-
-    let context = if llm_context.is_empty() {
-        "No extra static-analysis context collected.".to_string()
-    } else {
-        llm_context.join("\n")
+        findings
+            .iter()
+            .map(|finding| format!("- {:?}: {}", finding.severity, finding.message))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     let bundle_section = bundle_snapshot.unwrap_or("Bundle snapshot unavailable.");
-    //Return ONLY JSON in this exact shape: {{\"score\": <number between 0.0 and 1.0>}}. Do not include markdown or any extra keys.\n\n
     format!(
-        "Review this governance proposal and provide a score on the scale 0.0-1.0, where 0.0 = an unsafe or unsecure proposal, 0.5 = a neutral proposal, and 1.0 = a perfectly safe and secure proposal. You can provide a score anywhere along this spectrum. If you have any doubts at all, you must score under 0.5. Above 0.5 means you have no doubts and no critical findings. Proposal id: {}. Description: {}. Action: {:?}. {}\n\nStatic analysis context:\n{}\n\nBundle snapshot:\n{}",
+        "Proposal metadata:\n- proposal_id: {}\n- description: {}\n- action: {:?}\n\nDeterministic findings:\n{}\n\nBundle snapshot:\n{}",
         proposal.proposal_id,
         proposal.description,
         proposal.action,
-        manifest_snippet,
-        context,
+        findings_summary,
         bundle_section
     )
 }
@@ -565,7 +527,10 @@ async fn build_bundle_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use chrono::Utc;
     use serde_json::json;
@@ -794,7 +759,7 @@ mod tests {
         path
     }
 
-    fn copy_dir_recursive(from: &PathBuf, to: &PathBuf) -> std::io::Result<()> {
+    fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
         for entry in fs::read_dir(from)? {
             let entry = entry?;
             let file_type = entry.file_type()?;

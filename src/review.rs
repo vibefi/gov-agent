@@ -712,6 +712,7 @@ mod tests {
         CompositeLlm::from_config(&LlmConfig {
             openai: disabled_provider(),
             anthropic: disabled_provider(),
+            ollama: disabled_ollama_provider(),
         })
     }
 
@@ -720,6 +721,14 @@ mod tests {
             enabled: false,
             base_url: None,
             api_key_env: None,
+            model: None,
+        }
+    }
+
+    fn disabled_ollama_provider() -> crate::config::OllamaProviderConfig {
+        crate::config::OllamaProviderConfig {
+            enabled: false,
+            base_url: None,
             model: None,
         }
     }

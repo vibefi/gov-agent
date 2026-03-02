@@ -712,6 +712,7 @@ mod tests {
         CompositeLlm::from_config(&LlmConfig {
             openai: disabled_provider(),
             anthropic: disabled_provider(),
+            ollama: disabled_provider(),
         })
     }
 

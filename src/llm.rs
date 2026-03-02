@@ -47,6 +47,7 @@ pub struct CompositeLlm {
 impl CompositeLlm {
     pub fn from_config(config: &LlmConfig) -> Self {
         let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(OllamaProvider::new(&config.ollama)),
             Box::new(OpenAiLikeProvider::new("openai", &config.openai)),
             Box::new(AnthropicProvider::new(&config.anthropic)),
         ];
@@ -244,6 +245,82 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
+struct OllamaProvider {
+    cfg: ProviderConfig,
+    http: Client,
+}
+
+impl OllamaProvider {
+    fn new(cfg: &ProviderConfig) -> Self {
+        Self {
+            cfg: cfg.clone(),
+            http: Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OllamaProvider {
+    async fn analyze(&self, ctx: &LlmContext) -> Result<LlmResponse> {
+        if !self.cfg.enabled {
+            return Err(anyhow!("provider disabled"));
+        }
+
+        let base_url = self
+            .cfg
+            .base_url
+            .clone()
+            .ok_or_else(|| anyhow!("provider missing base_url"))?;
+        let model = self
+            .cfg
+            .model
+            .clone()
+            .unwrap_or_else(|| "llama3.2:3b".to_string());
+        let api_key = match self.cfg.api_key_env.as_deref() {
+            Some(key_var) => Some(
+                env::var(key_var)
+                    .map_err(|_| anyhow!("provider api key env var {key_var} is not set"))?,
+            ),
+            None => None,
+        };
+
+        let mut request = self
+            .http
+            .post(format!("{}/api/generate", base_url.trim_end_matches('/')))
+            .json(&json!({
+                "model": model,
+                "prompt": ctx.prompt,
+                "stream": false,
+                "options": {
+                    "temperature": 0.1
+                }
+            }));
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().await?;
+
+        let status = response.status();
+        let body: serde_json::Value = response.json().await?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "ollama provider returned HTTP {} with body {}",
+                status,
+                body
+            ));
+        }
+
+        let text = extract_ollama_text(&body)
+            .ok_or_else(|| anyhow!("ollama provider response missing content"))?;
+
+        Ok(LlmResponse {
+            provider: "ollama".to_string(),
+            model,
+            text,
+        })
+    }
+}
+
 pub fn redact_secrets(input: &str) -> String {
     let mut redacted = input.to_string();
     for regex in REDACTION_PATTERNS.iter() {
@@ -289,9 +366,27 @@ fn extract_responses_text(body: &serde_json::Value) -> Option<String> {
     text.filter(|value| !value.trim().is_empty())
 }
 
+fn extract_ollama_text(body: &serde_json::Value) -> Option<String> {
+    if let Some(text) = body.get("response").and_then(|value| value.as_str())
+        && !text.trim().is_empty()
+    {
+        return Some(text.to_string());
+    }
+
+    let text = body
+        .get("message")
+        .and_then(|value| value.get("content"))
+        .and_then(|value| value.as_str());
+
+    text.filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::redact_secrets;
+    use serde_json::json;
+
+    use super::{extract_ollama_text, redact_secrets};
 
     #[test]
     fn redacts_common_secret_patterns() {
@@ -309,5 +404,23 @@ mod tests {
         let redacted = redact_secrets(&text);
         assert!(!redacted.contains(key));
         assert!(redacted.contains("ethereum_private_key=[REDACTED]"));
+    }
+
+    #[test]
+    fn extracts_ollama_generate_text() {
+        let body = json!({ "response": "hello from ollama" });
+        assert_eq!(
+            extract_ollama_text(&body).as_deref(),
+            Some("hello from ollama")
+        );
+    }
+
+    #[test]
+    fn extracts_ollama_chat_text() {
+        let body = json!({ "message": { "content": "hello from chat" } });
+        assert_eq!(
+            extract_ollama_text(&body).as_deref(),
+            Some("hello from chat")
+        );
     }
 }

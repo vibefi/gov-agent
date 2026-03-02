@@ -135,6 +135,7 @@ pub fn profile_thresholds(profile: ConfidenceProfile) -> (f32, f32) {
 pub struct LlmConfig {
     pub openai: ProviderConfig,
     pub anthropic: ProviderConfig,
+    pub ollama: ProviderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -582,6 +583,12 @@ impl LlmConfig {
                 base_url: Some("https://api.anthropic.com/v1".to_string()),
                 api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
                 model: Some("claude-haiku-4-5".to_string()),
+            },
+            ollama: ProviderConfig {
+                enabled: true,
+                base_url: Some("http://127.0.0.1:11434".to_string()),
+                api_key_env: None,
+                model: Some("llama3.2:3b".to_string()),
             },
         }
     }

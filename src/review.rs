@@ -521,6 +521,7 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        process::Command,
     };
 
     use chrono::Utc;
@@ -621,12 +622,11 @@ mod tests {
 
     #[tokio::test]
     async fn red_team_fixture_produces_risky_findings_and_low_score_without_llm() {
-        let fixture_dir = red_team_fixture_dir();
         let root_cid = "bafy-red-team-fixture";
         let cache_root = temp_cache_root("gov-agent-red-team-review");
         let cid_dir = cache_root.join(root_cid);
         fs::create_dir_all(&cid_dir).expect("create cache cid dir");
-        copy_dir_recursive(&fixture_dir, &cid_dir).expect("copy fixture into cache");
+        copy_red_team_fixture_into(&cid_dir);
 
         let fetcher = BundleFetcher::new(&IpfsConfig {
             gateway_url: "http://127.0.0.1:1".to_string(),
@@ -725,11 +725,43 @@ mod tests {
         }
     }
 
-    fn red_team_fixture_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn copy_red_team_fixture_into(dest: &Path) {
+        let bundles_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
-            .join("bundles")
-            .join("red_team_vapp")
+            .join("bundles");
+        let fixture_dir = bundles_root.join("red_team_vapp");
+        if fixture_dir.exists() {
+            copy_dir_recursive(&fixture_dir, dest).expect("copy fixture into cache");
+            return;
+        }
+
+        let tarball = bundles_root.join("red_team_vapp.tar.gz");
+        assert!(
+            tarball.exists(),
+            "red-team fixture not found: expected {fixture_dir:?} or {tarball:?}"
+        );
+
+        let extract_root = temp_cache_root("gov-agent-red-team-fixture");
+        let status = Command::new("tar")
+            .arg("xzf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&extract_root)
+            .status()
+            .expect("extract red-team fixture tarball");
+        assert!(
+            status.success(),
+            "failed to extract red-team fixture tarball: {tarball:?}"
+        );
+
+        let extracted_dir = extract_root.join("red_team_vapp");
+        assert!(
+            extracted_dir.exists(),
+            "red-team fixture tarball missing expected root dir: {extracted_dir:?}"
+        );
+        copy_dir_recursive(&extracted_dir, dest).expect("copy extracted fixture into cache");
+
+        let _ = fs::remove_dir_all(&extract_root);
     }
 
     fn temp_cache_root(prefix: &str) -> PathBuf {

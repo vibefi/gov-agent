@@ -10,9 +10,17 @@ Content taken from commit 762c7a9bbe861aa7723ddd9f8b6e41b611674546 `vibefi/dapp-
 
 It contains only one malicious rogue send in App.tsx#L316. Instead of swapping tokens, it just sends the amount to a random address. 
 
+To avoid committing the raw fixture tree, this bundle is stored as:
+- `malicious_uniswapv2.tar.gz`
+
+The e2e helper (`e2e/src/publish-test-bundle.ts`) extracts the archive at runtime when `malicious_uniswapv2/` is not present.
+
 ## red_team_vapp
 
 Obviously malicious app.
+
+To avoid committing the raw fixture tree, this bundle is stored as:
+- `red_team_vapp.tar.gz`
 
 Expected signals:
 - risky package scripts (`curl ... | bash`)

@@ -67,8 +67,6 @@ bun run publish:test-bundle malicious_uniswapv2
   - `GOV_AGENT_IPFS_CACHE_DIR`
   - `GOV_AGENT_DATA_DIR`
 
-`review.minify_bundle_text` defaults to `true` and trims line indentation and empty lines before file contents are sent to the LLM, reducing prompt tokens without renaming symbols. Disable with `review.minify_bundle_text = false` or `GOV_AGENT_MINIFY_BUNDLE_TEXT=false`.
-
 ## Local Models
 
 Ships with support for a local [Ollama](https://ollama.com/) API server.

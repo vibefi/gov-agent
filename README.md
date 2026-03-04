@@ -63,8 +63,11 @@ bun run publish:test-bundle malicious_uniswapv2
   - `GOV_AGENT_DETERMINISTIC_WEIGHT`
   - `GOV_AGENT_LLM_WEIGHT`
   - `GOV_AGENT_FROM_BLOCK`
+  - `GOV_AGENT_MINIFY_BUNDLE_TEXT`
   - `GOV_AGENT_IPFS_CACHE_DIR`
   - `GOV_AGENT_DATA_DIR`
+
+`review.minify_bundle_text` defaults to `true` and trims line indentation and empty lines before file contents are sent to the LLM, reducing prompt tokens without renaming symbols. Disable with `review.minify_bundle_text = false` or `GOV_AGENT_MINIFY_BUNDLE_TEXT=false`.
 
 ## Local Models
 

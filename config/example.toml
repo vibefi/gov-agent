@@ -58,7 +58,7 @@ enabled = true
 base_url = "http://127.0.0.1:11434"
 # Not needed for local Ollama; only for hosted Ollama endpoints (e.g., https://ollama.com/api)
 # api_key_env = "OLLAMA_API_KEY"
-model = "llama3.2:3b"
+model = "qwen3.5:9b"
 
 [notifications.telegram]
 enabled = false

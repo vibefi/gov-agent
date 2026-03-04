@@ -588,7 +588,7 @@ impl LlmConfig {
                 enabled: true,
                 base_url: Some("http://127.0.0.1:11434".to_string()),
                 api_key_env: None,
-                model: Some("llama3.2:3b".to_string()),
+                model: Some("qwen3.5:9b".to_string()),
             },
         }
     }

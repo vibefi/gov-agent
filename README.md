@@ -34,8 +34,8 @@ cargo run -- backfill --from-block 10239268 --profile sepolia --rpc-url "$SEPOLI
 Quick malicious-bundle proposal flow (via `vibefi/e2e`) for fast gov-agent pickup testing:
 
 ```bash
-bun run publish:test-bundle -- --bundle red_team_vapp
-bun run publish:test-bundle -- --bundle malicious_uniswapv2
+bun run publish:test-bundle red_team_vapp
+bun run publish:test-bundle malicious_uniswapv2
 ```
 
 ## Configuration
@@ -65,6 +65,12 @@ bun run publish:test-bundle -- --bundle malicious_uniswapv2
   - `GOV_AGENT_FROM_BLOCK`
   - `GOV_AGENT_IPFS_CACHE_DIR`
   - `GOV_AGENT_DATA_DIR`
+
+## Local Models
+
+Ships with support for a local [Ollama](https://ollama.com/) API server.
+
+ - `qwen3.5:9b` with 32k context window size works very well in preliminary testing.
 
 ## Notes
 

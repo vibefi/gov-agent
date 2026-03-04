@@ -20,6 +20,7 @@ This repository includes a working foundation through vote execution:
 - LLM callouts for OpenAI, Anthropic, Ollama, and VeniceAI with automatic provider fallback
 - LLM audit persistence with prompt/response redaction
 - JSON-file state persistence and block cursoring
+- Prometheus metrics endpoint and OpenTelemetry trace export hooks
 
 ## Usage
 
@@ -66,6 +67,39 @@ bun run publish:test-bundle malicious_uniswapv2
   - `GOV_AGENT_MINIFY_BUNDLE_TEXT`
   - `GOV_AGENT_IPFS_CACHE_DIR`
   - `GOV_AGENT_DATA_DIR`
+  - `GOV_AGENT_METRICS_ENABLED`
+  - `GOV_AGENT_METRICS_BIND`
+  - `GOV_AGENT_OTLP_ENDPOINT`
+  - `GOV_AGENT_OTLP_SERVICE_NAME`
+  - `GOV_AGENT_OTLP_TIMEOUT_SECS`
+
+## Observability
+
+- Prometheus exporter:
+  - Enabled by default on `127.0.0.1:9464/metrics`
+  - Configure via `observability.metrics_enabled` and `observability.metrics_bind`
+- OpenTelemetry traces:
+  - Enable by setting `observability.otlp_endpoint` (or `GOV_AGENT_OTLP_ENDPOINT`)
+  - Proposal lifecycle spans include `proposal_id` and stage-level timings
+
+Dashboard-ready metrics:
+
+- `gov_agent_proposals_discovered_total`
+- `gov_agent_proposals_processed_total`
+- `gov_agent_proposals_failed_total{stage=...}`
+- `gov_agent_stage_latency_seconds{stage=decode|fetch_proposals|review|vote_submit|...}`
+- `gov_agent_vote_submit_total{status=success|failure}`
+- `gov_agent_provider_errors_total{provider=rpc|ipfs|llm,operation=...}`
+- `gov_agent_last_successful_poll_timestamp_seconds`
+- `gov_agent_last_poll_attempt_timestamp_seconds`
+- `gov_agent_last_processed_proposal_timestamp_seconds`
+- `gov_agent_listener_staleness_seconds`
+
+Critical alert examples:
+
+- Listener stale: `gov_agent_listener_staleness_seconds > 120`
+- Repeated stage failures: rate on `gov_agent_proposals_failed_total{stage=...}`
+- Vote submit failures: rate on `gov_agent_vote_submit_total{status=\"failure\"}`
 
 ## Local Models
 

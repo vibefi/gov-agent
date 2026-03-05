@@ -101,11 +101,55 @@ Critical alert examples:
 - Repeated stage failures: rate on `gov_agent_proposals_failed_total{stage=...}`
 - Vote submit failures: rate on `gov_agent_vote_submit_total{status="failure"}`
 
+### Local test stack (Prometheus + Grafana + Tempo + OTel Collector)
+
+This repo includes a ready-to-run local stack under [`observability/`](./observability):
+- Prometheus on `http://127.0.0.1:9090`
+- Grafana on `http://127.0.0.1:3000` (default login `admin` / `admin`)
+- Tempo on `http://127.0.0.1:3200`
+- OTel Collector OTLP ingest on `127.0.0.1:4317` (gRPC), `127.0.0.1:4318` (HTTP)
+
+Start the stack:
+
+```bash
+cd observability
+docker compose up -d
+```
+
+Run `gov-agent` with telemetry enabled:
+
+```bash
+GOV_AGENT_METRICS_ENABLED=true \
+GOV_AGENT_METRICS_BIND=127.0.0.1:9464 \
+GOV_AGENT_OTLP_ENDPOINT=http://127.0.0.1:4317 \
+GOV_AGENT_OTLP_SERVICE_NAME=gov-agent-local \
+cargo run -- run --profile devnet --rpc-url http://127.0.0.1:8545
+```
+
+Quick checks:
+
+```bash
+curl -s http://127.0.0.1:9464/metrics | rg '^gov_agent_'
+curl -s 'http://127.0.0.1:9090/api/v1/query?query=rate(gov_agent_proposals_processed_total%5B5m%5D)'
+```
+
+Grafana provisions:
+- `Prometheus` datasource
+- `Tempo` datasource
+- `Gov Agent Observability` dashboard
+
+Stop/remove stack:
+
+```bash
+cd observability
+docker compose down -v
+```
+
 ## Local Models
 
 Ships with support for a local [Ollama](https://ollama.com/) API server.
 
- - `qwen3.5:9b` with 32k context window size works very well in preliminary testing.
+- `qwen3.5:9b` with 32k context window size works very well in preliminary testing.
 
 ## Notes
 

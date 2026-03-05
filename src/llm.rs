@@ -276,7 +276,7 @@ impl LlmProvider for OllamaProvider {
             .cfg
             .model
             .clone()
-            .unwrap_or_else(|| "llama3.2:3b".to_string());
+            .unwrap_or_else(|| "qwen3.5:9b".to_string());
         let api_key = match self.cfg.api_key_env.as_deref() {
             Some(key_var) => Some(
                 env::var(key_var)

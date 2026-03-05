@@ -32,6 +32,7 @@ state_file = "state.json"
 [review]
 prompt_file = "prompts/default_prompt.md"
 max_bundle_bytes = 41943040
+minify_bundle_text = false
 
 [decision]
 # profile is only an alias. Numeric thresholds are the source of truth.
@@ -58,7 +59,7 @@ enabled = true
 base_url = "http://127.0.0.1:11434"
 # Not needed for local Ollama; only for hosted Ollama endpoints (e.g., https://ollama.com/api)
 # api_key_env = "OLLAMA_API_KEY"
-model = "llama3.2:3b"
+model = "qwen3.5:9b"
 
 [llm.venice]
 enabled = true

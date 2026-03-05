@@ -61,6 +61,7 @@ pub struct StorageConfig {
 pub struct ReviewConfig {
     pub prompt_file: Option<PathBuf>,
     pub max_bundle_bytes: u64,
+    pub minify_bundle_text: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +255,7 @@ impl AppConfig {
             review: ReviewConfig {
                 prompt_file: None,
                 max_bundle_bytes: 40 * 1024 * 1024,
+                minify_bundle_text: false,
             },
             decision: DecisionConfig {
                 profile: Some(ConfidenceProfile::Conservative),
@@ -293,6 +295,7 @@ impl AppConfig {
             review: ReviewConfig {
                 prompt_file: None,
                 max_bundle_bytes: 40 * 1024 * 1024,
+                minify_bundle_text: false,
             },
             decision: DecisionConfig {
                 profile: Some(ConfidenceProfile::Conservative),
@@ -418,6 +421,11 @@ impl AppConfig {
             && let Ok(parsed) = v.parse::<u64>()
         {
             self.network.from_block = parsed;
+        }
+        if let Ok(v) = env::var("GOV_AGENT_MINIFY_BUNDLE_TEXT")
+            && let Some(parsed) = parse_bool_env(&v)
+        {
+            self.review.minify_bundle_text = parsed;
         }
     }
 
@@ -570,6 +578,14 @@ fn validate_required_address(field_name: &str, value: &str, profile: &str) -> Re
     Ok(())
 }
 
+fn parse_bool_env(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 impl LlmConfig {
     fn defaults() -> Self {
         Self {
@@ -589,7 +605,7 @@ impl LlmConfig {
                 enabled: true,
                 base_url: Some("http://127.0.0.1:11434".to_string()),
                 api_key_env: None,
-                model: Some("llama3.2:3b".to_string()),
+                model: Some("qwen3.5:9b".to_string()),
             },
             venice: ProviderConfig {
                 enabled: true,
